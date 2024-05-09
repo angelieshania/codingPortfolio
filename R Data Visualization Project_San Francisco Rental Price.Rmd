@@ -1,0 +1,214 @@
+---
+title: "Data Visualization Project"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, out.width = "80%", fig.align = "center")
+```
+# Introduction
+
+SF Rents is a data set that entails rental prices, rental permits, and new housing construction details in the San Francisco Bay Area and Santa Cruz county, ranging from 1985 to 2018. The data is sourced from TidyTuesday project, which originated from Kate Pennington, data.sfgov.org, and Vital Signs. It consists of three datasets:
+    <ul>
+      <li>"rent.csv"</li>
+      <li>"sf_permits.csv"</li>
+      <li>"new_construction.csv"</li>
+    </ul>
+
+
+In this group project, we want to explore the patterns of rental prices in the recent decade across the regions in the San Francisco Bay Area. Our research question would thus be:
+"How do rental prices vary across the regions in the San Francisco Bay Area from 2011-2018?"
+
+The time frame of 2011 to 2018 is chosen as it is relevant to the topic that we are interested in. For our project, we would only use the “rent.csv” dataset as we are only concerned about rental prices. 
+
+```{r packages and getting the data}
+#install.packages("Hmisc")
+#install.packages("gridExtra")
+#install.packages("sf")
+#install.packages("MetBrewer")
+#install.packages("ggpubr")
+#install.packages("jpeg")
+#install.packages("urbnmapr")
+#install.packages("devtools")
+library(readxl)
+library(lubridate)
+library(stringr)
+library(tidyverse)
+library(ggthemes)
+library(gridExtra)
+library(sf)
+library(MetBrewer)
+library(ggplot2)
+library(ggpubr)
+library(jpeg)
+library(dplyr)
+library(devtools)
+#devtools::install_github("UrbanInstitute/urbnmapr")
+library(urbnmapr)
+library(Hmisc)
+
+#Getting the Data:
+tuesdata <- tidytuesdayR::tt_load('2022-07-05')
+rent <- tuesdata$rent
+```
+# Data Cleaning
+
+For our project, we will only be using data from "rent.csv", as the other 2 data sets are not relevant to our research question. Upon initial analysis, we realise that there are only a few columns that are relevant to our project, which are date, year, county, price, and sqft. Thus, only afore-mentioned columns are selected for our clean data set. Since our question’s scope is limited to the San Francisco Bay area and years 2011 onwards, we will also remove any observation that is in Santa Cruz county and the years before 2011. Furthermore, NA values in the county and sqft column are removed. For easier analysis, we also converted date and county respectively from char type to a Date object and a factor. Finally, we grouped the counties into the regions they belong to, which comprises North Bay, East Bay, South Bay, Peninsula, and San Francisco. 
+
+```{r data cleaning}
+north_bay = c("solano", "napa", "sonoma", "marin")
+east_bay = c("contra costa", "alameda")
+south_bay = c("santa clara")
+peninsula = c("san mateo")
+sf = c("san francisco")
+
+clean_rent = rent %>% 
+  select(date, year, county, price, sqft) %>%
+  filter(county != "santa cruz") %>%
+  filter(year > 2010) %>%
+  filter(!is.na(sqft)) %>% 
+  filter(!is.na(county)) %>%
+  mutate(date = ymd(date)) %>%
+  mutate(county = as.factor(county)) %>%
+  mutate(price_sqft = price/sqft) %>% 
+  mutate(Region = case_when(
+    county %in% north_bay ~ "North Bay",
+    county %in% east_bay ~ "East Bay",
+    county %in% south_bay ~ "South Bay",
+    county %in% peninsula ~ "Peninsula",
+    county %in% sf ~ "San Francisco"
+  )) 
+```
+
+There are a total of 58,235 observations in the clean data set. The summary of the cleaned data set shows that there is a significant range for both price and sqft, which are 29,760 and 56,987 respectively. The drastic difference between the 3rd quartile and maximum value for price and sqft suggest that there may be some outliers in the observations. 
+
+```{r data summary}
+summary(clean_rent)
+dim(clean_rent)
+```
+
+# Data Visualisations
+
+## Line Graph
+
+```{r line graph}
+rent_data = clean_rent %>% 
+  group_by(Region, year) %>%
+  summarise(median_psf = median(price_sqft), .groups = "drop") 
+
+ggplot(rent_data, aes(x = year, y = median_psf, group = Region, color = Region)) +
+  geom_point(size = 3) +
+  geom_line(show.legend = FALSE, linewidth = 1) +
+  labs(title = "Median Price per Square Foot in each Bay area from 2011-2018",
+       x = "Year",
+       y = "Median Price per Square Foot") +
+  theme(plot.title = element_text(hjust = 1), legend.position = "none") +
+  theme_minimal() +
+  scale_y_continuous(limits = c(0,4.5))
+```
+
+To understand the yearly variations of rental prices across different regions from 2011 to 2018, we created a line graph in which median price per square foot (PSF) is plotted against year. To prepare the data needed for the plot, we first calculated PSF by dividing price by sqft. Grouping by year and region, we then find the median PSF and summarise it under the “median_psf” column. In this case, using a line graph is ideal due to its dynamic nature, which allows us to clearly observe the changes in rental prices from 2011 to 2018 and easily identify any overall trends or patterns. Furthermore, plot also allows us to see how such trends may vary across the different regions. 
+
+
+## Map Plot
+
+```{r map plot}
+sf_map <- get_urbn_map("counties", sf = TRUE)
+sf_map = sf_map %>%
+  mutate(county_name = gsub(" County", "", county_name)) %>%
+  filter(state_name == "California", county_name %in% c("Alameda", "Contra Costa", "Marin", "Napa", "San Francisco", "San Mateo", "Santa Clara", "Solano", "Sonoma"))
+
+visual = clean_rent %>%
+  mutate(county = str_to_title(county)) %>%
+  group_by(year, Region) %>%
+  mutate(med_price = median(price_sqft))%>%
+  ungroup() %>%
+  inner_join(sf_map, by = c("county" = "county_name")) %>%
+  group_by(year) %>%
+  mutate(rank = dense_rank(med_price)) %>%
+  ungroup()
+
+ggplot(data = visual) + 
+  geom_sf(data = sf_map, fill = NA) + 
+  geom_sf(aes(geometry = geometry, fill = factor(rank)), color = NA) + 
+  facet_wrap(~year, nrow = 2) + 
+  theme(panel.background = element_blank(), 
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.background = element_blank(), 
+        legend.title = element_text(hjust = 0.5), 
+        legend.position = "top", 
+        legend.justification = "center", 
+        legend.key.width = unit(1, "cm"), 
+        strip.background = element_blank(), 
+        strip.text.x = element_text(face = "bold"), 
+        axis.text = element_blank(), 
+        axis.ticks = element_blank()) + 
+  scale_fill_manual(values = MetBrewer::met.brewer("Hokusai2"),
+                    name = "From Least to Most Expensive",
+                    limits = factor(seq(min(visual$rank), max(visual$rank), by = 1))) + 
+  guides(fill = guide_legend(title.position = "top")) +
+  ggtitle("Median Rent Prices Ranked by Region")
+```
+
+To explore how each region ranks in terms of median rental price per square foot (PSF) over time, we decided to make use of a map plot. Map plots are particularly advantageous as it provides readers with a spatial context of the regions in the San Francisco Bay Area, allowing for easier identification of temporal patterns. As the original dataset does not contain the necessary components to initiate a map, an US map object was imported from the “urbnmapr” package. It was then joined together with the rentals dataset by the county column. After grouping it by year, we then calculated the rankings for median PSF for each region. Lastly, with the `facet_wrap()` function, we represented the rankings from 2011 to 2018 with a compilation of maps, such that yearly spatial patterns can be identified more easily.
+
+## Violin-box Plot
+
+```{r violin-box plot}
+url = "https://media.istockphoto.com/id/934894104/vector/four-seasons-banners-with-abstract-trees-vector-illustration.jpg?s=612x612&w=0&k=20&c=5lc9DPxtOSQiJYLOqk8sct2RfnEP8Jwb-IP1faoCJDA="
+download.file(url, destfile = "seasons.jpg", mode = 'wb')
+img = readJPEG("seasons.jpg")
+
+violin_data = clean_rent %>% 
+  mutate(months = months(date)) %>% 
+  select(date, months, price_sqft) %>%
+  mutate(seasons = as.factor(ifelse(months %in% c("March", "April", "May"), "Spring",
+                                    ifelse(months %in% c("June", "July", "August"), "Summer",
+                                           ifelse(months %in% c("September", "October", "November"), "Autumn",
+                                                  "Winter"))))) %>%
+  group_by(seasons) %>% mutate(max_price = quantile(price_sqft, 0.75) + 1.5 * IQR(price_sqft),
+                               min_price = quantile(price_sqft, 0.25) - 1.5 * IQR(price_sqft)) %>%
+  filter(price_sqft <= max_price & price_sqft >= min_price) 
+
+violin_data$seasons = factor(violin_data$seasons, levels = c("Spring", "Summer", "Autumn", "Winter"))
+
+ggplot(violin_data, aes(x = seasons, y = price_sqft)) +
+  background_image(img) +
+  geom_violin(aes(fill = seasons)) +
+  geom_boxplot(outlier.shape = NA, width = 0.4) + 
+  scale_fill_manual(values = c("#FFC0CB", "#FF9999", "#FF6666", "#CC3333"), name = "Seasons") +
+  labs(title = "San Francisco Rental Price by Seasons",
+       x = "Seasons",
+       y = "Price per Square Foot") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"), 
+        axis.title = element_text(size = 10)) +
+  stat_summary(fun.data = "median_hilow", 
+               geom = "errorbar",
+               width = 0.2,
+               position = position_dodge(width = 0.75))
+```
+
+Beyond analysing price variations over the years, we also want to explore how rental prices vary with the seasons in 2011-2018 using a violin-box plot, with price per square foot plotted on the y-axis and seasons on the x-axis. To achieve this, months were extracted from the date variable and grouped based on their given seasons. The following functions were then used to plot the processed data: `geom_violin()`, `geom_boxplot()`. A box plot was chosen due to its ability to categorise data sets based on its position on the numerical distribution and provide us with their numerical summary. The use of a box plot also helps in finding outliers. To further improve the plot by displaying distribution patterns, a violin plot was included underneath.
+
+# Discussion
+
+From the line graph, there is a notable upward trend for median price per square foot across all counties from 2011 to 2018. This suggests that rental prices have generally gone up in the San Francisco Bay Area in this time period. Such a phenomenon may be a result of the technical boom of Silicon Valley (Taliafeero) - located in the southern part of the Bay Area - where employment opportunities have attracted many new workers into the region, which drastically increased the demand for housing and thus rental prices. The technical development in Silicon Valley may also explain the spatial and temporal patterns in the map plot, where rental prices in the southern regions of San Francisco Bay Area noticeably rank higher over the years as opposed to the other regions. Areas closer to Silicon Valley - the South Bay - would see a higher demand for rental properties compared to areas that are further away, due to its convenience to travel to Silicon Valley. The steady and ongoing growth in the technology industry in the 2010s (Fox) would also explain why the rental prices in the South Bay consistently rank higher compared to the other regions in the map plot.
+
+As for seasonal patterns, the violin box-plot shows that in the summertime, rental prices are generally higher, whereas in the winter it is generally lower with a median of a little over $2 PSF. In 2021, Essex Apartments highlighted the seasonal dynamics of San Francisco rental prices. Summer emerges as the peak, driven by a surge in tourism, short-term rentals, family relocations during school breaks, and the ebb and flow of college students. Spring and autumn maintain relatively stable rental prices. With pleasant weather and lacking the heightened demand of summer, they see moderate fluctuations as fewer people consider moving or visiting. Conversely, winter experiences the lowest rental prices due to less desirable weather, reduced tourist interest, and settled student and family populations, prompting property owners to be more flexible in negotiating rents to fill vacancies during the off-peak season.
+
+# References
+
+“Best Time to Rent an Apartment in San Francisco.” Essex, 29 Jan. 2021, www.essexapartmenthomes.com/blog/2021/01/29/best-time-to-rent-an-apartment-in-san-francisco.
+
+Fox, Justin. “Silicon Valley Is Still Creating Lots of Good Jobs.” Bloomberg.Com, Bloomberg, 13 Mar. 2018, www.bloomberg.com/view/articles/2018-03-13/silicon-valley-is-still-creating-lots-of-good-jobs?embedded-checkout=true.
+
+Taliaferro, Richard. “Tech Boom Hits San Francisco Rental Prices.” The Wall Street Journal, Dow Jones & Company, 27 June 2012, www.wsj.com/video/tech-boom-hits-san-francisco-rental-prices/932C92EA-028E-4F12-AA15-D25F282ACE29. 
+
+R4DS Online Learning Community (2023). Tidy Tuesday: A weekly social data project. https://github.com/rfordatascience/tidytuesday.
+
